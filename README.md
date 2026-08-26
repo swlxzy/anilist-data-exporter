@@ -55,7 +55,7 @@ However, the following structure is recommended for keeping the project and expo
 ```text
 your-main-directory/
 └── anilist-data-exporter/
-    └── anilist_exporter.py
+    └── anilist.py
 ```
 
 The program will automatically create a folder for the AniList username when an export is generated.
@@ -65,7 +65,7 @@ For example:
 ```text
 your-main-directory/
 └── anilist-data-exporter/
-    ├── anilist_exporter.py
+    ├── anilist.py
     └── Xerithh/
         ├── Completed_TV.json
         ├── Planning.json
@@ -79,13 +79,13 @@ You do not need to manually create the username folder.
 Open a terminal in the directory containing the Python file and run:
 
 ```bash
-python anilist_exporter.py
+python anilist.py
 ```
 
 Or, if your system uses `python3`:
 
 ```bash
-python3 anilist_exporter.py
+python3 anilist.py
 ```
 
 The program will ask for an AniList username:
