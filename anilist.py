@@ -1,44 +1,86 @@
 import json
-import urllib.request
-import urllib.error
-import os
 import re
+import urllib.error
+import urllib.request
+from pathlib import Path
 
 
 API_URL = "https://graphql.anilist.co"
 
 
-def safe_filename(name):
-    """Dosya isminde sorun çıkarabilecek karakterleri temizler."""
-    name = re.sub(r'[<>:"/\\|?*]', '', name)
-    name = name.strip()
-    return name or "list"
+BASE_QUERY = """
+query ($username: String) {
+    MediaListCollection(userName: $username, type: ANIME) {
+        lists {
+            name
+            isCustomList
+            status
+            entries {
+                score
+                advancedScores
+                media {
+                    id
+                    averageScore
+                    title {
+                        english
+                        romaji
+                    }
+                }
+            }
+        }
+    }
+}
+"""
 
 
-def unique_filename(folder, filename):
-    """Aynı dosya varsa üzerine yazmak yerine _2, _3... ekler."""
-    base, ext = os.path.splitext(filename)
-    path = os.path.join(folder, filename)
+DETAIL_QUERY = """
+query ($username: String) {
+    MediaListCollection(userName: $username, type: ANIME) {
+        lists {
+            name
+            isCustomList
+            status
+            entries {
+                score
+                advancedScores
+                startedAt {
+                    year
+                    month
+                    day
+                }
+                completedAt {
+                    year
+                    month
+                    day
+                }
+                notes
+                media {
+                    id
+                    averageScore
+                    title {
+                        english
+                        romaji
+                    }
+                }
+            }
+        }
+    }
+}
+"""
 
-    counter = 2
 
-    while os.path.exists(path):
-        path = os.path.join(folder, f"{base}_{counter}{ext}")
-        counter += 1
-
-    return path
-
-
-def graphql_request(query, variables):
+def graphql_request(username, query):
     payload = json.dumps({
         "query": query,
-        "variables": variables
+        "variables": {
+            "username": username
+        }
     }).encode("utf-8")
 
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "AniListExporter/1.0"
+        "User-Agent": "AniListDataExporter/1.0"
     }
 
     request = urllib.request.Request(
@@ -49,98 +91,98 @@ def graphql_request(query, variables):
 
     try:
         with urllib.request.urlopen(request) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            data = json.loads(
+                response.read().decode("utf-8")
+            )
 
-        if "errors" in data:
-            print("AniList GraphQL hatası:")
-            for error in data["errors"]:
-                print(" -", error.get("message", "Bilinmeyen hata"))
-            return None
-
-        return data
-
-    except urllib.error.HTTPError as e:
-        print(f"HTTP hatası: {e.code}")
+    except urllib.error.HTTPError as error:
+        print(f"\nHTTP error: {error.code}")
         return None
 
-    except urllib.error.URLError as e:
-        print(f"Bağlantı hatası: {e.reason}")
+    except urllib.error.URLError as error:
+        print(f"\nConnection error: {error.reason}")
         return None
 
-    except Exception as e:
-        print(f"Beklenmeyen hata: {e}")
+    except Exception as error:
+        print(f"\nUnexpected error: {error}")
         return None
 
+    if data.get("errors"):
+        print("\nAniList API error:")
 
-def get_lists(username):
-    query = '''
-    query ($username: String) {
-      MediaListCollection(userName: $username, type: ANIME) {
-        lists {
-          name
-          isCustomList
-          status
-          entries {
-            score
-            advancedScores
-            media {
-              id
-              averageScore
-              title {
-                english
-                romaji
-              }
-            }
-          }
-        }
-      }
-    }
-    '''
+        for error in data["errors"]:
+            print(
+                f"- {error.get('message', 'Unknown error')}"
+            )
 
-    data = graphql_request(
-        query,
-        {"username": username}
-    )
-
-    if not data:
         return None
 
-    return (
-        data
-        .get("data", {})
-        .get("MediaListCollection", {})
-        .get("lists", [])
-    )
+    return data
 
 
-def process_entry(entry):
-    media = entry.get("media", {})
+def format_date(date_data):
+    if not date_data or not date_data.get("year"):
+        return None
 
+    year = date_data["year"]
+    month = date_data.get("month") or 1
+    day = date_data.get("day") or 1
+
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def process_entry(entry, detail_mode):
+    media = entry.get("media") or {}
     media_id = media.get("id")
 
-    titles = media.get("title", {})
-    title = titles.get("english") or titles.get("romaji")
+    if not media_id:
+        return None
 
-    if not media_id or not title:
+    titles = media.get("title") or {}
+
+    anime_title = (
+        titles.get("english")
+        or titles.get("romaji")
+    )
+
+    if not anime_title:
         return None
 
     item = {
-        "title": title
+        "title": anime_title
     }
 
-    # Kullanıcının verdiği genel puan
     user_score = entry.get("score")
 
     if user_score is not None and user_score > 0:
         item["score"] = user_score
 
-    # AniList topluluk ortalaması
-    average = media.get("averageScore")
+    average_score = media.get("averageScore")
 
-    if average is not None and average > 0:
-        item["average"] = average
+    if average_score is not None and average_score > 0:
+        item["average"] = average_score
 
-    # Advanced Scores
+    if detail_mode in (2, 4):
+        started = format_date(
+            entry.get("startedAt")
+        )
+
+        completed = format_date(
+            entry.get("completedAt")
+        )
+
+        if started:
+            item["started"] = started
+
+        if completed:
+            item["completed"] = completed
+
+    if detail_mode in (3, 4):
+        notes = entry.get("notes")
+
+        if notes:
+            item["notes"] = notes
+
     raw_advanced = entry.get("advancedScores")
 
     if isinstance(raw_advanced, dict):
@@ -148,9 +190,7 @@ def process_entry(entry):
         empty_count = 0
 
         for category, score in raw_advanced.items():
-
-            # 0 = değerlendirilmemiş
-            if score == 0 or score is None:
+            if score is None or score == 0:
                 empty_count += 1
             else:
                 valid_advanced[category.lower()] = score
@@ -164,151 +204,280 @@ def process_entry(entry):
     return media_id, item
 
 
+def safe_filename(name):
+    name = name.strip()
+
+    name = re.sub(
+        r'[<>:"/\\|?*]',
+        "_",
+        name
+    )
+
+    name = re.sub(
+        r"\s+",
+        "_",
+        name
+    )
+
+    name = name.strip("._")
+
+    return name or "export"
+
+
+def unique_filename(directory, filename):
+    path = directory / filename
+
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    suffix = path.suffix
+    counter = 2
+
+    while True:
+        candidate = (
+            directory
+            / f"{stem}_{counter}{suffix}"
+        )
+
+        if not candidate.exists():
+            return candidate
+
+        counter += 1
+
+
+def parse_selection(raw_input, list_count):
+    selected_numbers = []
+
+    for part in raw_input.split(","):
+        part = part.strip()
+
+        if not part.isdigit():
+            continue
+
+        number = int(part)
+
+        if number not in selected_numbers:
+            selected_numbers.append(number)
+
+    if not selected_numbers:
+        return None, False
+
+    select_all_number = list_count + 1
+
+    if select_all_number in selected_numbers:
+        return list(range(1, list_count + 1)), True
+
+    valid_numbers = [
+        number
+        for number in selected_numbers
+        if 1 <= number <= list_count
+    ]
+
+    if not valid_numbers:
+        return None, False
+
+    return valid_numbers, False
+
+
+def get_detail_mode():
+    print("\nAdditional data:")
+    print(
+        "[1] Basic Data Only "
+        "(Title + Scores + Average)"
+    )
+    print("[2] Add Dates (Started / Completed)")
+    print("[3] Add Notes")
+    print("[4] Add Dates + Notes")
+
+    while True:
+        choice = input(
+            "\nSelection (1-4) [Default: 1]: "
+        ).strip()
+
+        if not choice:
+            return 1
+
+        if choice in ("1", "2", "3", "4"):
+            return int(choice)
+
+        print("Invalid selection. Please enter 1, 2, 3, or 4.")
+
+
 def main():
-    username = input("AniList username: ").strip()
+    print("AniList Data Exporter")
+    print("---------------------")
+
+    username = input(
+        "\nAniList username: "
+    ).strip()
 
     if not username:
-        print("Kullanıcı adı boş olamaz!")
+        print("Username cannot be empty.")
         return
 
-    print("\nHesabınızdaki listeler:\n")
+    detail_mode = get_detail_mode()
 
-    lists = get_lists(username)
+    if detail_mode == 1:
+        query = BASE_QUERY
+    else:
+        query = DETAIL_QUERY
 
-    if not lists:
-        print("Liste bulunamadı veya profil gizli!")
+    print("\nFetching AniList data...")
+
+    data = graphql_request(
+        username,
+        query
+    )
+
+    if not data:
         return
 
-    available_lists = []
+    collection = (
+        data.get("data", {})
+        .get("MediaListCollection")
+    )
 
-    for index, anime_list in enumerate(lists, start=1):
+    if not collection:
+        print(
+            "\nNo lists found. "
+            "The profile may be private or unavailable."
+        )
+        return
 
-        name = anime_list.get("name", "Unnamed")
-        count = len(anime_list.get("entries", []))
+    available_lists = collection.get("lists", [])
 
-        available_lists.append(anime_list)
+    if not available_lists:
+        print("\nNo anime lists found.")
+        return
 
-        print(f"[{index}] {name} ({count})")
+    print("\nLists available on this account:\n")
+
+    for index, anime_list in enumerate(
+        available_lists,
+        start=1
+    ):
+        name = anime_list.get(
+            "name",
+            "Unnamed"
+        )
+
+        entries = anime_list.get(
+            "entries",
+            []
+        )
+
+        print(
+            f"[{index}] {name} "
+            f"({len(entries)})"
+        )
 
     select_all_number = len(available_lists) + 1
 
     print(
-        f"[{select_all_number}] HEPSİNİ ÇEK / SELECT ALL"
+        f"[{select_all_number}] SELECT ALL"
     )
 
-    choice = input(
-        "\nÇekilecek listeler "
-        "(Örn: 1 veya 2,1,3): "
+    raw_selection = input(
+        "\nLists to export "
+        "(Example: 1 or 2,1,3): "
     ).strip()
 
-    if not choice:
-        print("Seçim yapılmadı!")
-        return
-
-    selected_numbers = []
-
-    for part in choice.split(","):
-
-        part = part.strip()
-
-        if part.isdigit():
-
-            number = int(part)
-
-            if number not in selected_numbers:
-                selected_numbers.append(number)
+    selected_numbers, select_all = parse_selection(
+        raw_selection,
+        len(available_lists)
+    )
 
     if not selected_numbers:
-        print("Geçersiz seçim!")
+        print("\nInvalid selection.")
         return
 
-    # SELECT ALL
-    if select_all_number in selected_numbers:
-
+    if select_all:
         selected_lists = available_lists
-
     else:
+        selected_lists = [
+            available_lists[number - 1]
+            for number in selected_numbers
+        ]
 
-        selected_lists = []
+    username_folder = safe_filename(username)
 
-        for number in selected_numbers:
+    output_directory = (
+        Path.cwd() / username_folder
+    )
 
-            if 1 <= number <= len(available_lists):
-
-                anime_list = available_lists[number - 1]
-
-                if anime_list not in selected_lists:
-                    selected_lists.append(anime_list)
-
-    if not selected_lists:
-        print("Geçerli bir liste seçilmedi!")
-        return
-
-    # Kullanıcıya özel klasör
-    output_folder = safe_filename(username)
-
-    os.makedirs(output_folder, exist_ok=True)
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     result_lists = {}
     summary_counts = {}
 
-    total_count = 0
+    total_anime_count = 0
+    total_lists = len(selected_lists)
 
-    # Her seçilen liste kendi içinde duplicate kontrolü yapar.
-    # Böylece aynı anime iki farklı listede varsa ikisinde de kalabilir.
-    for anime_list in selected_lists:
+    print(
+        f"\nProcessing {total_lists} "
+        f"selected list(s)...\n"
+    )
 
-        list_name = anime_list.get("name", "Unnamed")
-        entries = anime_list.get("entries", [])
+    for list_index, anime_list in enumerate(
+        selected_lists,
+        start=1
+    ):
+        list_name = anime_list.get(
+            "name",
+            "Unnamed"
+        )
+
+        entries = anime_list.get(
+            "entries",
+            []
+        )
 
         processed_entries = []
-        seen_ids = set()
+
+        # Duplicate control is now local to each list.
+        list_seen_ids = set()
 
         for entry in entries:
+            processed = process_entry(
+                entry,
+                detail_mode
+            )
 
-            result = process_entry(entry)
-
-            if not result:
+            if not processed:
                 continue
 
-            media_id, item = result
+            media_id, item = processed
 
-            if media_id in seen_ids:
+            if media_id in list_seen_ids:
                 continue
 
-            seen_ids.add(media_id)
-
+            list_seen_ids.add(media_id)
             processed_entries.append(item)
 
-        if processed_entries:
+        result_lists[list_name] = processed_entries
 
-            result_lists[list_name] = processed_entries
-            summary_counts[list_name] = len(processed_entries)
-            total_count += len(processed_entries)
+        summary_counts[list_name] = len(
+            processed_entries
+        )
 
-    # SELECT ALL ise kısa dosya adı
-    if select_all_number in selected_numbers:
+        total_anime_count += len(
+            processed_entries
+        )
 
-        base_filename = "select_all.json"
-
-    else:
-
-        # Seçilen listelerin isimlerinden dosya adı oluştur
-        names = [
-            safe_filename(anime_list.get("name", "list"))
-            for anime_list in selected_lists
-        ]
-
-        base_filename = "_".join(names) + ".json"
-
-    output_path = unique_filename(
-        output_folder,
-        base_filename
-    )
+        print(
+            f"[{list_index}/{total_lists}] "
+            f"{list_name}: "
+            f"{len(processed_entries)}/"
+            f"{len(entries)}"
+        )
 
     final_output = {
         "summary": {
-            "total": total_count,
+            "total": total_anime_count,
             "lists": summary_counts
         },
         "lists": result_lists
@@ -320,17 +489,56 @@ def main():
         ensure_ascii=False
     )
 
-    with open(
-        output_path,
-        "w",
-        encoding="utf-8"
-    ) as file:
+    if select_all:
+        filename = "select_all.json"
+    else:
+        filename_parts = [
+            safe_filename(
+                anime_list.get(
+                    "name",
+                    "Unnamed"
+                )
+            )
+            for anime_list in selected_lists
+        ]
 
-        file.write(compressed_json)
+        filename = (
+            "_".join(filename_parts)
+            + ".json"
+        )
 
-    print("\n✅ İşlem tamamlandı!")
-    print(f"📊 Toplam: {total_count} anime")
-    print(f"📂 Dosya: {output_path}")
+    output_path = unique_filename(
+        output_directory,
+        filename
+    )
+
+    try:
+        with open(
+            output_path,
+            "w",
+            encoding="utf-8"
+        ) as output_file:
+            output_file.write(
+                compressed_json
+            )
+
+    except OSError as error:
+        print(
+            f"\nCould not write output file: "
+            f"{error}"
+        )
+        return
+
+    print("\nExport completed!")
+    print(
+        f"Total anime entries: "
+        f"{total_anime_count}"
+    )
+    print(f"Output file: {output_path.name}")
+    print(
+        f"Saved to: "
+        f"{output_path.resolve()}"
+    )
 
 
 if __name__ == "__main__":
