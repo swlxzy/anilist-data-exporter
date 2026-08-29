@@ -146,6 +146,6 @@ If you find an issue or have an idea for an improvement, feel free to open an is
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the BSD-3 License.
 
 See [`LICENSE`](LICENSE) for details.
