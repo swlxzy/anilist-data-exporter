@@ -24,7 +24,7 @@ def load_json(path):
         return json.load(file)
 
 
-def collect_columns(data):
+def collect_columns(data, is_manga):
     columns = ["title", "score", "average"]
 
     optional_columns = [
@@ -34,6 +34,17 @@ def collect_columns(data):
         "advanced",
         "emptyAdvanced"
     ]
+
+    if is_manga:
+        optional_columns = [
+            "chapters",
+            "volumes",
+            "started",
+            "completed",
+            "notes",
+            "advanced",
+            "emptyAdvanced"
+        ]
 
     for lists in data.get("lists", {}).values():
         for item in lists:
@@ -60,13 +71,13 @@ def format_value(value):
     return value
 
 
-def create_workbook(data):
+def create_workbook(data, is_manga):
     workbook = Workbook()
 
     default_sheet = workbook.active
     workbook.remove(default_sheet)
 
-    columns = collect_columns(data)
+    columns = collect_columns(data, is_manga)
 
     for list_name, entries in data.get("lists", {}).items():
         sheet_name = safe_filename(list_name)[:31] or "List"
@@ -158,7 +169,9 @@ def main():
         print("Error: This does not appear to be an AniList Data Exporter file.")
         return
 
-    workbook = create_workbook(data)
+    is_manga = "manga" in os.path.basename(json_path).lower()
+
+    workbook = create_workbook(data, is_manga)
 
     base_name = os.path.splitext(os.path.basename(json_path))[0]
     output_path = os.path.join(
