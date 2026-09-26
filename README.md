@@ -33,7 +33,7 @@ The Excel converter additionally requires:
 
 Clone the repository:
 ```
-git clone [https://github.com/swlxzy/anilist-data-exporter.git](https://github.com/swlxzy/anilist-data-exporter.git)
+git clone https://github.com/swlxzy/anilist-data-exporter.git
 cd anilist-data-exporter
 ```
 
